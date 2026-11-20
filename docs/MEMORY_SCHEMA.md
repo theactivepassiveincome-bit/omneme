@@ -36,6 +36,9 @@ with `referenced_in_export` (or `missing_from_export`); bytes are not copied. `r
 `{deleted: true, tweet}` / `{noteTweet}`) verbatim, so the same post in another split file is a duplicate, a changed
 post is a revision, and a post missing from a later export is never treated as deleted. Social records are
 searchable but are not conversations or messages and are not grouped into threads.
+MCP `get_conversation` with a post id returns the post in pages of at most 16,000 characters: follow
+`nextTextOffset` by passing it back as `textOffset` (character offset; pages never split a surrogate pair) until it
+is null; concatenating the returned `text` pages gives the exact stored text. `textOffset` applies only to posts.
 
 ## Attachment availability
 `text_extracted` (provider-supplied text stored), `referenced_in_export` (file is in the archive, bytes not

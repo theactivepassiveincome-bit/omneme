@@ -81,23 +81,54 @@ const OPEN = { name: 'get_conversation', description: 'Read one archived convers
   inputSchema: { type: 'object', required: ['id'], properties: {
     id: { type: 'string', description: 'Conversation id from search_memory (id=...)' },
     offset: { type: 'number', description: 'Index of the first message to return (default 0)' },
-    limit: { type: 'number', description: 'Max messages in this page (default 30, max 100)' } } } };
+    limit: { type: 'number', description: 'Max messages in this page (default 30, max 100)' },
+    textOffset: { type: 'number', description: 'X posts only: character offset to continue a long post, from the previous nextTextOffset (default 0)' } } } };
 const PAGE_CHARS = 24000, MSG_CHARS = 4000;
 
-/** One page of a conversation, in the archive's tree order (branches marked), capped by message count and characters. */
-export function readConversation(ix: MemoryIndex, id: string, offset = 0, limit = 30): ToolResult {
+const POST_PAGE_CHARS = 16000, POST_META_ITEMS = 20, POST_META_CHARS = 200;
+const cap = (t: string) => t.length > POST_META_CHARS ? t.slice(0, POST_META_CHARS) + '…' : t;
+
+/** OMN-060: one page of a social post's text. `textOffset` counts UTF-16 code units of the stored text (JavaScript string
+ *  index); pages never split a surrogate pair, so concatenating the returned pages reproduces the text exactly. */
+function readSocialPost(r0: MemoryRecord, rawOffset: unknown): ToolResult {
+  const t = r0.text ?? ''; const total = t.length; const id = socialKey(r0);
+  const off = rawOffset === undefined ? 0 : typeof rawOffset === 'number' ? rawOffset : Number.NaN;
+  const lowSurrogate = (i: number) => { const c = t.charCodeAt(i); return c >= 0xdc00 && c <= 0xdfff; };
+  if (!Number.isInteger(off) || off < 0 || (total > 0 ? off >= total : off > 0) || (off > 0 && lowSurrogate(off)))
+    return { text: `Invalid textOffset ${String(rawOffset)} for post id="${id}": use a whole number from 0 to ${Math.max(0, total - 1)} at a character boundary, as returned in nextTextOffset.`, isError: true };
+  let end = Math.min(total, off + POST_PAGE_CHARS);
+  if (end < total && lowSurrogate(end)) end--; // keep a surrogate pair together
+  const chunk = t.slice(off, end); const next = end < total ? end : null;
+  const head = `Social post: ${cap(r0.title ?? 'X post')} [${r0.provider}] id=${id}${r0.flags.length ? ` (${r0.flags.slice(0, POST_META_ITEMS).join(', ')})` : ''}\n${r0.createdAt ?? 'no timestamp'}\n`
+    + (total > POST_PAGE_CHARS ? `Text characters ${off + 1}-${end} of ${total}.\n` : '');
+  let meta = '';
+  if (off === 0) { // media and links once, on the first page, capped
+    const media = r0.attachments.slice(0, POST_META_ITEMS).map((a) => `\n[media] ${cap(a.name ?? a.ref ?? 'file')} (${a.availability === 'referenced_in_export' ? 'in the original X archive; not copied into the vault' : 'not in the export'})`);
+    const rel = r0.relations.slice(0, POST_META_ITEMS).map((x) => `\n[${cap(x.type)}] ${cap(x.target)}`);
+    const more = Math.max(0, r0.attachments.length - POST_META_ITEMS) + Math.max(0, r0.relations.length - POST_META_ITEMS);
+    meta = media.join('') + rel.join('') + (more ? `\n(${more} more media/link entries not shown)` : '');
+  }
+  const foot = next !== null
+    ? `\n\nMORE TEXT AVAILABLE (${total - next} characters remaining): call get_conversation with id="${id}" and textOffset=${next}.`
+    : '\n\nEnd of post.';
+  return { text: `${head}\n${chunk}${meta}${foot}`,
+    structured: { id, type: 'social_post', title: r0.title, provider: r0.provider, createdAt: r0.createdAt, flags: r0.flags.slice(0, POST_META_ITEMS),
+      textOffset: off, nextTextOffset: next, totalChars: total, returnedChars: chunk.length, text: chunk } };
+}
+
+/** One page of a conversation, in the archive's tree order (branches marked), capped by message count and characters.
+ *  A social post id returns one page of that post instead (see readSocialPost); `textOffset` applies only to posts. */
+export function readConversation(ix: MemoryIndex, id: string, offset = 0, limit = 30, textOffset?: unknown): ToolResult {
   const v = id ? ix.conversation(id) : null;
   if (!v || !v.messages.length) return { text: `No conversation with id "${id}" was found in Omneme. Use the id= value shown by search_memory.`, isError: true };
+  const c = v.conversation; const r0 = v.messages[0].record;
+  if (!c && r0.kind === 'social_event') { // one social record (X post): shown whole across pages, never as a chat thread
+    if (Math.floor(offset) > 0) return { text: `id="${socialKey(r0)}" is a single post, not a conversation: use textOffset (from nextTextOffset) to read more of its text.`, isError: true };
+    return readSocialPost(r0, textOffset);
+  }
+  if (textOffset !== undefined) return { text: `textOffset applies only to social posts; for conversation id="${id}" use offset and limit.`, isError: true };
   const total = v.messages.length; const start = Math.max(0, Math.floor(offset) || 0);
   if (start >= total) return { text: `This conversation has ${total} messages; offset ${start} is past the end. Use offset 0 to ${total - 1}.`, isError: true };
-  const c = v.conversation; const r0 = v.messages[0].record;
-  if (!c && r0.kind === 'social_event') { // one social record (X post): shown whole, never as a chat thread
-    const t = r0.text ?? ''; const body = t.length > PAGE_CHARS ? `${t.slice(0, PAGE_CHARS)} […truncated, ${t.length - PAGE_CHARS} more characters]` : t;
-    const media = r0.attachments.map((a) => `\n[media] ${a.name ?? a.ref ?? 'file'} (${a.availability === 'referenced_in_export' ? 'in the original X archive; not copied into the vault' : 'not in the export'})`).join('');
-    const rel = r0.relations.map((x) => `\n[${x.type}] ${x.target}`).join('');
-    return { text: `Social post: ${r0.title ?? 'X post'} [${r0.provider}] id=${socialKey(r0)}${r0.flags.length ? ` (${r0.flags.join(', ')})` : ''}\n${r0.createdAt ?? 'no timestamp'}\n\n${body}${media}${rel}`,
-      structured: { id: socialKey(r0), type: 'social_post', title: r0.title, provider: r0.provider, createdAt: r0.createdAt, flags: r0.flags } };
-  }
   const lines: string[] = []; let chars = 0, i = start;
   const max = Math.min(100, Math.max(1, Math.floor(limit) || 30));
   for (; i < total && i - start < max; i++) {
@@ -122,7 +153,7 @@ export function callTool(name: string, args: any, ix: MemoryIndex, store: { vaul
       const q = String(args?.query ?? ''); const res = recall(ix, q, { provider: args?.provider, limit: Math.min(20, Number(args?.limit) || 5) });
       return { text: formatRecall(q, res), structured: { results: res } };
     }
-    if (name === OPEN.name) return readConversation(ix, String(args?.id ?? ''), Number(args?.offset ?? 0), Number(args?.limit ?? 30));
+    if (name === OPEN.name) return readConversation(ix, String(args?.id ?? ''), Number(args?.offset ?? 0), Number(args?.limit ?? 30), args?.textOffset ?? undefined);
     if (name === SAVE.name) {
       const h = normalise(args, 'claude'); const r = saveHandoff(store.vault, h);
       store.records.push({ kind: 'handoff', raw: h } as MemoryRecord);
