@@ -1,0 +1,18 @@
+{
+  "name": "omneme",
+  "version": "0.1.5",
+  "description": "Self-sovereign, encrypted, lifelong personal AI memory vault (Stage 1: local vault, ChatGPT/Claude import, search, backup).",
+  "license": "Apache-2.0",
+  "type": "module",
+  "private": true,
+  "bin": { "omneme": "bin/omneme.mjs" },
+  "engines": { "node": "^22.18.0 || >=23.6.0" },
+  "scripts": {
+    "omneme": "node bin/omneme.mjs",
+    "test": "node --no-warnings=ExperimentalWarning --test --test-concurrency=4 --test-skip-pattern=\"bounded memory\" \"test/*.test.ts\" && npm run test:memory",
+    "test:memory": "node --no-warnings=ExperimentalWarning --test --test-name-pattern=\"bounded memory\" test/localfiles.test.ts",
+    "demo": "bash examples/demo.sh"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}

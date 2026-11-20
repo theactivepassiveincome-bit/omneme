@@ -1,0 +1,22 @@
+# Never commit personal data, vaults, backups or keys
+*.omneme
+*.omneme-*
+*.omneme.partial
+*.omnbak
+*.zip
+conversations*.json
+!test/**
+exports/
+private/
+mock-ledger/
+*.wif
+*.key
+*.pem
+.env
+.env.*
+!.env.example
+# tooling
+node_modules/
+coverage/
+*.log
+.DS_Store
