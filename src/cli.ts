@@ -158,7 +158,7 @@ async function main(argv: string[]) {
   // OMN-034: name the selected vault file before anything is opened (backup-preview prints it in its own report).
   if (sharedRule && cmd !== 'backup-preview') console.log(`Vault file: ${vaultPath}`);
   const provider = o.provider as Provider | 'auto' | undefined;
-  if (provider && !['auto', 'chatgpt', 'claude', 'gemini', 'grok'].includes(provider)) throw new Error('--provider must be auto, chatgpt, claude, gemini or grok');
+  if (provider && !['auto', 'chatgpt', 'claude', 'gemini', 'grok', 'x'].includes(provider)) throw new Error('--provider must be auto, chatgpt, claude, gemini, grok or x');
   const ledger = resolve(o.ledger ?? join(homedir(), '.omneme', 'mock-ledger'));
 
   const withVault = async <T>(fn: (v: Vault) => Promise<T> | T): Promise<T> => {
@@ -200,6 +200,12 @@ async function main(argv: string[]) {
             console.log(`  messages:      ${r.messagesSeen} seen (${c.branches} side branches, ${c.branchMessages} branch messages), ${r.messagesInserted} new, ${r.messagesRevised} revised, ${r.messagesDuplicate} already present`);
             console.log(`  attachments:   ${c.attachmentsSaved} saved and archived, ${c.attachmentsNotProvided} not provided by platform, ${c.attachmentsListedButMissing} listed but missing from export`);
             console.log('  note:          CodingCat output is a normalized capture; official exports remain the authoritative record');
+          } else if (r.social) {
+            const x = r.social;
+            console.log('  X archive:     POSTS ONLY. This is not a complete copy of the X account (see "not imported" below).');
+            console.log(`  posts:         ${x.postsSeen} read (${x.notes} long-form notes, ${x.deleted} deleted posts), ${x.postsNew} new, ${x.postsRevised} revised, ${x.postsDuplicate} already present, ${x.malformed} malformed`);
+            console.log(`  media:         ${x.mediaReferenced} referenced in the archive, ${x.mediaMissing} not in the export; media files are NOT copied into the vault, keep the original ZIP`);
+            console.log(`  not imported:  ${x.notImported.length} other data file(s) (${x.notImported.reduce((n, e) => n + e.bytes, 0)} bytes), e.g. DMs, Grok chats, likes; ${x.mediaFiles.files} media files (${x.mediaFiles.bytes} bytes); ${x.viewerAssets.files} archive viewer files (not user data)`);
           } else if (r.archive) {
             const a = r.archive;
             console.log(`  archive:       ${a.entriesArchived}/${a.entries} files archived byte-exact (${a.bytesArchived} bytes)`);
@@ -210,10 +216,10 @@ async function main(argv: string[]) {
           console.log(`  conversations: ${r.conversationsSeen} seen, ${r.conversationsNew} new, ${r.conversationsRevised} revised, ${r.conversationsUnchanged} unchanged`);
           console.log(`  messages:      ${r.messagesSeen} seen, ${r.messagesInserted} new, ${r.messagesRevised} revised, ${r.messagesDuplicate} already present`);
           }
-          if (!r.archive) console.log(`  reconciliation: ${r.elementsSeen} conversation objects in source = ${r.conversationsSeen} imported + ${r.conversationsFailed} failed; ${r.sourceUnits} source nodes = ${r.messagesSeen} messages + ${r.structuralNodes} structural + ${r.skippedUnits} unreadable`);
-          if (!r.archive) console.log(`  providers:     ${Object.entries(r.providers).map(([k, n]) => `${k}=${n}`).join(' ') || 'none'}`);
+          if (!r.archive && !r.social) console.log(`  reconciliation: ${r.elementsSeen} conversation objects in source = ${r.conversationsSeen} imported + ${r.conversationsFailed} failed; ${r.sourceUnits} source nodes = ${r.messagesSeen} messages + ${r.structuralNodes} structural + ${r.skippedUnits} unreadable`);
+          if (!r.archive && !r.social) console.log(`  providers:     ${Object.entries(r.providers).map(([k, n]) => `${k}=${n}`).join(' ') || 'none'}`);
           const at = r.attachments;
-          if (!r.archive) console.log(`  attachments:   ${at.text_extracted} text extracted, ${at.referenced_in_export} in export (bytes not vaulted), ${at.missing_from_export} missing from export, ${at.metadata_only} metadata only`);
+          if (!r.archive && !r.social) console.log(`  attachments:   ${at.text_extracted} text extracted, ${at.referenced_in_export} in export (bytes not vaulted), ${at.missing_from_export} missing from export, ${at.metadata_only} metadata only`);
           const where = (e: { entry: string; index: number | null; offset?: number | null; conversationId?: string | null }) =>
             `${safe(e.entry)}${e.index !== null ? ` #${e.index}` : ''}${e.offset != null ? ` @byte ${e.offset}` : ''}${e.conversationId ? ` conv ${safe(e.conversationId)}` : ''}`;
           for (const e of r.errors) console.log(`  ERROR   ${where(e)}: ${safe(e.reason)}`);
@@ -230,6 +236,7 @@ async function main(argv: string[]) {
       console.log(`Conversations: ${s.conversations}\nMessages:      ${s.messages}\nImports:       ${s.imports}${s.importsNotComplete ? ` (${s.importsNotComplete} NOT complete — run "omneme imports")` : ''}\nStored records: ${s.records} (${s.revisedRecords} with earlier revisions)`);
       for (const [p, c] of Object.entries(s.perProvider))
         console.log(`  ${p}: ${c.conversations} conversations, ${c.messages} messages, ${c.earliest?.slice(0, 10) ?? '?'} → ${c.latest?.slice(0, 10) ?? '?'}${c.undated ? `, ${c.undated} without timestamp` : ''}`);
+      if (s.socialEvents) console.log(`Social posts:  ${s.socialEvents} (X; not counted as conversations or messages)`);
       if (s.localFiles) console.log(`Local files: ${s.localFiles} (${s.localBytes} bytes) in ${s.localSources} source(s)`);
       if (s.projects || s.artifacts || s.archivedFiles || s.originalExports)
         console.log(`Projects: ${s.projects} (${s.projectDocs} documents) · Artifacts: ${s.artifacts} (${s.artifactVersions} versions) · Archived files: ${s.archivedFiles} (${s.archivedBytes} bytes) · Original export files: ${s.originalExports}`);
@@ -314,7 +321,9 @@ async function main(argv: string[]) {
         if (o.json) { console.log(JSON.stringify(hits.map((h) => ({ recordId: h.record.recordId, provider: h.record.provider, conversationId: h.record.conversationId, messageId: h.record.messageId, role: h.record.role, createdAt: h.record.createdAt, title: h.conversationTitle, snippet: h.snippet, provenance: h.record.provenance })), null, 2)); return 0; }
         for (const h of hits) {
           console.log(`\n[${h.record.provider}${sourceTag(h.record) ? ' via CodingCat' : ''}] ${safe(h.conversationTitle ?? '(untitled)')}  ${h.record.createdAt ?? '(no date)'}  ${h.record.role}`);
-          console.log(`  source: conversation ${safe(h.record.conversationId)} message ${safe(h.record.messageId)} (${h.record.recordId}) from ${safe(h.record.provenance.exportLabel)}/${safe(h.record.provenance.exportEntry)}`);
+          console.log(h.record.kind === 'social_event'
+            ? `  source: ${safe(h.record.provider)} post ${safe(h.record.messageId)} (account ${safe(h.record.conversationId)}, ${h.record.recordId}) from ${safe(h.record.provenance.exportLabel)}/${safe(h.record.provenance.exportEntry)}`
+            : `  source: conversation ${safe(h.record.conversationId)} message ${safe(h.record.messageId)} (${h.record.recordId}) from ${safe(h.record.provenance.exportLabel)}/${safe(h.record.provenance.exportEntry)}`);
           console.log('  ' + safe(h.snippet));
         }
         console.log(`\n${hits.length} result(s)`);
@@ -327,7 +336,7 @@ async function main(argv: string[]) {
         const view = new MemoryIndex(v.loadAll()).conversation(args[0]);
         if (!view) { console.error('Conversation not found'); return 1; }
         const c = view.conversation;
-        console.log(`# ${safe(c?.title ?? '(untitled)')}\n${c ? safe(convKey(c)) : '?'}  created ${c?.createdAt ?? 'unknown'}  updated ${c?.updatedAt ?? 'unknown'}\n`);
+        console.log(`# ${safe(c?.title ?? view.messages[0]?.record.title ?? '(untitled)')}\n${c ? safe(convKey(c)) : view.messages[0]?.record.kind === 'social_event' ? 'social post (' + safe(view.messages[0].record.provider) + ')' : '?'}  created ${c?.createdAt ?? view.messages[0]?.record.createdAt ?? 'unknown'}  updated ${c?.updatedAt ?? view.messages[0]?.record.updatedAt ?? 'unknown'}\n`);
         for (const { record: m, depth, siblings, position } of view.messages) {
           const ind = '  '.repeat(Math.min(depth, 10));
           const tags = [siblings > 1 ? `branch ${position}/${siblings}` : '', m.flags.includes('current_branch') ? 'current' : '', m.flags.includes('hidden') ? 'hidden' : '', m.model ?? ''].filter(Boolean).join(', ');

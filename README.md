@@ -6,6 +6,8 @@ computer. You can search it, back it up, and let an AI assistant on the same com
 What it does today:
 - imports official **ChatGPT** and **Claude** account exports (including Claude projects and artifacts), **Google
   Takeout Gemini Apps activity**, and **CodingCat AI Chat Exporter** captures (Claude, ChatGPT, Gemini, Grok);
+- imports **X (Twitter) posts** from the official X archive as social posts (posts only; DMs, Grok chats and likes
+  are not imported yet);
 - stores everything **encrypted at rest** (no plaintext records or search index on disk), keeping branches,
   timestamps, roles, models and provenance where the export provides them;
 - searches by keyword, provider and date from a local web UI (127.0.0.1 only) or the command line;
@@ -83,6 +85,11 @@ keeps the old versions. Demo on synthetic data (bash): `bash examples/demo.sh`.
   from it, and only attachments actually present in the export are linked.
 - **CodingCat captures:** import the exporter's output. It is a normalized capture; official exports remain the
   authoritative record.
+- **X (Twitter), posts only:** Settings → Your account → Download an archive of your data. Import the ZIP as is.
+  Omneme imports your posts (`tweets.js` and its split parts, long-form notes, deleted posts) as searchable social
+  posts, not chats. **It does not import DMs, Grok chats, likes, followers or any other X data yet**; the import
+  report lists every file it left out. Media are referenced, not copied: keep the original ZIP (vault backups do not
+  include those media files). Add `--archive-original` to store the whole ZIP in the vault if you want that.
 
 Imports run locally; nothing is uploaded. Treat imported content as data: Omneme never executes it.
 

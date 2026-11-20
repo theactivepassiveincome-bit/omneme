@@ -3,7 +3,8 @@ import { sha256hex } from './crypto.ts';
 
 export const SCHEMA_VERSION = 'omneme.record/1';
 
-export type Provider = 'chatgpt' | 'claude' | 'gemini' | 'grok';
+/** AI chat providers, plus 'x' for X (Twitter) archive posts (social records, not chats). */
+export type Provider = 'chatgpt' | 'claude' | 'gemini' | 'grok' | 'x';
 /** original = imported verbatim; derived = AI/tool generated later; event = corrections, imports, supersessions. */
 export type RecordClass = 'original' | 'derived' | 'event';
 export type RecordKind = 'conversation' | 'message' | 'import' | 'correction'
@@ -11,7 +12,8 @@ export type RecordKind = 'conversation' | 'message' | 'import' | 'correction'
   | 'export_entry'  // one file inside an export archive, exact bytes in the blob store
   | 'project' | 'project_doc' | 'artifact' | 'artifact_version'
   | 'local_file' | 'local_dir' | 'local_symlink' // personal files and folders (Stage 1.3)
-  | 'handoff';      // cross-platform project handoff saved by an AI (Stage 4.2)
+  | 'handoff'       // cross-platform project handoff saved by an AI (Stage 4.2)
+  | 'social_event'; // one item from a social-media archive, e.g. an X post (OMN-059); never a chat message
 export type Scope = 'private' | 'business' | 'shared-project' | 'agent' | 'restricted';
 
 /**

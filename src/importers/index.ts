@@ -21,9 +21,10 @@ import { CHATGPT_IMPORTER, convertChatGPT, isChatGPTConversation } from './chatg
 import { CLAUDE_IMPORTER, convertClaude, isClaudeConversation } from './claude.ts';
 import { importClaudeArchive, type ArchiveStats } from './claudeArchive.ts';
 import { importCodingCat, looksLikeCodingCat, type CaptureStats } from './codingcat.ts';
+import { importXArchive, looksLikeXArchive, type SocialStats } from './x.ts';
 import { createReadStream } from 'node:fs';
 
-export const IMPORT_VERSION = '0.1.3';
+export const IMPORT_VERSION = '0.1.4';
 
 export interface ImportIssue { entry: string; index: number | null; offset?: number | null; conversationId?: string | null; reason: string }
 export type ImportStatus = 'started' | 'complete' | 'incomplete';
@@ -51,12 +52,14 @@ export interface ImportReport {
   skippedUnits: number;
   attachments: Record<Availability, number>;
   /** 'conversations' or 'archive' (projects / artifacts / other Claude categories); 'activity' = Google Takeout Gemini Apps activity log. */
-  category: 'conversations' | 'archive' | 'capture' | 'activity';
+  category: 'conversations' | 'archive' | 'capture' | 'activity' | 'social';
   archive: ArchiveStats | null;
   /** Google Takeout Gemini Apps activity statistics (category 'activity'). */
   activity?: GeminiActivityStats | null;
   /** CodingCat capture statistics (category 'capture'). */
   capture: CaptureStats | null;
+  /** X archive statistics (category 'social'): posts only; everything else is listed as not imported. */
+  social?: SocialStats | null;
   /** Exact original export file stored in the encrypted blob store. */
   originalArchived: { sha256: string; size: number } | null;
   errors: ImportIssue[];
@@ -86,18 +89,22 @@ export async function importExport(vault: Vault, path: string, opts: ImportOptio
     importId, status: 'started', startedAt, finishedAt: null, exportLabel: src.label, exportSha256: src.sha256, providers: {},
     elementsSeen: 0, conversationsFailed: 0, conversationsSeen: 0, conversationsNew: 0, conversationsRevised: 0, conversationsUnchanged: 0,
     sourceUnits: 0, messagesSeen: 0, messagesInserted: 0, messagesRevised: 0, messagesDuplicate: 0, structuralNodes: 0, skippedUnits: 0,
-    attachments: emptyAttachmentStats(), category: 'conversations', archive: null, activity: null, capture: null, originalArchived: null, errors: [], warnings: [], complete: false,
+    attachments: emptyAttachmentStats(), category: 'conversations', archive: null, activity: null, capture: null, social: null, originalArchived: null, errors: [], warnings: [], complete: false,
   };
   vault.putMany([importEvent(r)]); // durable "started" marker before any data
 
   const fail = (i: ImportIssue) => { r.errors.push(i); };
   // Gemini Takeout activity is recognised only by its exact path, before any other heuristic.
-  const activityEntries = provider === 'auto' || provider === 'gemini' ? geminiActivityEntries(src) : [];
+  // An official X archive is recognised only by its exact data/ layout (data/account.js plus a posts member).
+  const isSocial = (provider === 'auto' || provider === 'x') && looksLikeXArchive(src);
+  if (provider === 'x' && !isSocial) fail({ entry: src.label, index: null, reason: 'Not an X archive (expected data/account.js and data/tweets.js)' });
+  const activityEntries = !isSocial && (provider === 'auto' || provider === 'gemini') ? geminiActivityEntries(src) : [];
   const isActivity = activityEntries.length > 0;
-  const isCapture = !isActivity && await looksLikeCodingCat(src);
-  const entries = isCapture || isActivity ? [] : conversationEntries(src);
-  const isArchive = !isActivity && (isCapture || (!entries.length && src.kind !== 'json'));
-  if (isActivity) { r.category = 'activity'; r.activity = emptyGeminiStats(); }
+  const isCapture = !isSocial && provider !== 'x' && !isActivity && await looksLikeCodingCat(src);
+  const entries = isSocial || provider === 'x' || isCapture || isActivity ? [] : conversationEntries(src);
+  const isArchive = !isSocial && provider !== 'x' && !isActivity && (isCapture || (!entries.length && src.kind !== 'json'));
+  if (isSocial) r.category = 'social';
+  else if (isActivity) { r.category = 'activity'; r.activity = emptyGeminiStats(); }
   else if (isCapture) r.category = 'capture'; else if (isArchive) r.category = 'archive';
 
   // Exact original export file (byte-for-byte), verified against the SHA-256 taken when the source was opened.
@@ -139,6 +146,15 @@ export async function importExport(vault: Vault, path: string, opts: ImportOptio
     r.messagesInserted = results.filter((x) => x === 'inserted').length; // records, for archive imports
     r.messagesRevised = results.filter((x) => x === 'revision').length;
     r.messagesDuplicate = results.filter((x) => x === 'duplicate').length;
+  }
+  if (isSocial) {
+    // Posts only; media are referenced (never copied) and every other member is listed as not imported.
+    const { stats, attachments } = await importXArchive(vault, src, { importId, exportLabel: src.label, exportSha256: src.sha256 }, startedAt,
+      (i) => fail(i), (i) => r.warnings.push(i), opts.json ?? DEFAULT_JSON_LIMITS);
+    r.social = stats;
+    r.providers.x = stats.postsSeen;
+    r.attachments.referenced_in_export += attachments.referenced;
+    r.attachments.missing_from_export += attachments.missing;
   }
   if (isActivity) {
     // Each activity file is committed atomically: container record + every card, or nothing.
@@ -225,7 +241,7 @@ export async function importExport(vault: Vault, path: string, opts: ImportOptio
       fail({ entry: entry.name, index: null, offset: typeof off === 'number' ? off : null, reason: (e as Error).message });
     }
   }
-  if (!isArchive && !isActivity && !entries.length) fail({ entry: src.label, index: null, reason: 'No conversations.json found in export' });
+  if (!isSocial && provider !== 'x' && !isArchive && !isActivity && !entries.length) fail({ entry: src.label, index: null, reason: 'No conversations.json found in export' });
   if (r.elementsSeen !== r.conversationsSeen + r.conversationsFailed) fail({ entry: src.label, index: null, reason: 'Internal reconciliation failure (element count)' });
   r.complete = r.errors.length === 0;
   r.status = r.complete ? 'complete' : 'incomplete';

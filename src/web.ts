@@ -338,7 +338,7 @@ export function startWeb(opts: WebOptions): Promise<{ server: Server; url: strin
               : `<nav class="actions" aria-label="Next steps"><a href="/">Search your conversations</a> <a href="/#import">Import another platform</a></nav>`;
             const body = `<h1>Import ${r.complete ? 'complete' : 'INCOMPLETE'}</h1>${vaultLine()}
 <section class="card${r.complete ? '' : ' warn'}"><p class="meta">${esc(r.exportLabel)} · import ${esc(r.importId)}</p>
-<p>${r.conversationsSeen} conversations seen (${r.conversationsNew} new, ${r.conversationsRevised} revised, ${r.conversationsUnchanged} unchanged) · ${r.messagesSeen} messages seen (${r.messagesInserted} new)</p>
+${r.social ? `<p><strong>X archive: posts only.</strong> ${r.social.postsSeen} posts read (${r.social.postsNew} new, ${r.social.postsRevised} revised, ${r.social.postsDuplicate} already present, ${r.social.malformed} malformed). Not a complete copy of the X account: ${r.social.notImported.length} other data files (such as DMs, Grok chats and likes) were not imported. Media are referenced, not copied: keep the original ZIP.</p>` : `<p>${r.conversationsSeen} conversations seen (${r.conversationsNew} new, ${r.conversationsRevised} revised, ${r.conversationsUnchanged} unchanged) · ${r.messagesSeen} messages seen (${r.messagesInserted} new)</p>`}
 ${r.complete ? '' : '<p>Some parts could not be read. Everything readable was imported.</p>'}
 ${r.errors.slice(0, 50).map((e) => `<div class="meta">ERROR ${where(e)}</div>`).join('')}</section>
 ${actions}`;
@@ -379,7 +379,9 @@ ${actions}`;
         const v = ix.conversation(url.searchParams.get('id') ?? '');
         if (!v) return send(res, 404, page('Not found', '<p>Conversation not found.</p>', true));
         const c = v.conversation;
-        const body = `<h3>${esc(c?.title ?? '(untitled)')}</h3><p class="meta">${esc(c?.provider)} · ${esc(c?.conversationId)} · created ${esc(c?.createdAt ?? 'unknown')}</p>` +
+        const one = !c && v.messages[0]?.record.kind === 'social_event' ? v.messages[0].record : null; // a single X post, not a chat
+        const body = (one ? `<h3>${esc(one.title ?? 'X post')}</h3><p class="meta">${esc(one.provider)} social post · ${esc(one.messageId)} · ${esc(one.createdAt ?? 'unknown')}${one.attachments.length ? ' · media are referenced in the original X archive and not copied into the vault' : ''}</p>`
+          : `<h3>${esc(c?.title ?? '(untitled)')}</h3><p class="meta">${esc(c?.provider)} · ${esc(c?.conversationId)} · created ${esc(c?.createdAt ?? 'unknown')}</p>`) +
           v.messages.map(({ record: m, depth, siblings, position }) => `<div class="m ${esc(m.role)}" id="${esc(m.recordId)}" style="margin-left:${Math.min(depth, 8) * 18}px">
 <div class="meta">${esc(m.role ?? 'unknown')} · ${esc(m.createdAt ?? 'no timestamp')}${m.model ? ' · ' + esc(m.model) : ''}${siblings > 1 ? ` · branch ${position}/${siblings}` : ''}${m.flags.includes('current_branch') ? ' · current' : ''}${m.flags.includes('hidden') ? ' · hidden' : ''} · <code>${esc(m.recordId)}</code></div>
 <pre>${esc(m.text || '(no text content)')}</pre>${m.attachments.map((a) => `<div class="meta">📎 ${esc(a.name ?? a.ref ?? a.id ?? 'attachment')} — ${esc(a.availability)}</div>`).join('')}</div>`).join('');
@@ -396,12 +398,12 @@ ${actions}`;
 <form method="post" action="/reindex" class="row"><button>Rebuild index</button><span class="meta">re-reads the vault; imports do this automatically</span></form></section>
 <section class="card" id="connect-next"><h2>Connect your AI</h2><p class="meta">Let Claude Code, ChatGPT Work or Antigravity search your vault and save handoffs.</p><a class="btn" href="/connect">Connect your AI</a></section>`;
       body += `<section class="card" id="search"><h2>Search</h2><form method="get" action="/" class="row" role="search"><label class="sr" for="q">Keyword</label><input id="q" class="grow" name="q" value="${esc(q)}" placeholder="Keyword search">
-<select name="provider" aria-label="Provider"><option value="">All providers</option>${['chatgpt', 'claude', 'gemini', 'grok'].map((p) => `<option ${p === provider ? 'selected' : ''}>${p}</option>`).join('')}</select>
+<select name="provider" aria-label="Provider"><option value="">All providers</option>${['chatgpt', 'claude', 'gemini', 'grok', 'x'].map((p) => `<option ${p === provider ? 'selected' : ''}>${p}</option>`).join('')}</select>
 <input type="date" name="from" aria-label="From date" value="${esc(from ?? '')}"><input type="date" name="to" aria-label="To date" value="${esc(to ?? '')}"><button class="go">Search</button></form></section>`;
       if (q || provider || from || to) {
         const hits = q ? ix.search({ text: q, provider, from, to, limit: 200 }) : [];
         body += q ? `<p class="meta">${hits.length} result(s)${hits.length === 200 ? ' (first 200)' : ''}</p>` + hits.map((h) => `<div class="hit">
-<a href="/conversation?id=${encodeURIComponent(convKey(h.record))}#${esc(h.record.recordId)}">${esc(h.conversationTitle ?? '(untitled)')}</a>
+<a href="/conversation?id=${encodeURIComponent(h.record.kind === 'social_event' ? h.record.recordId : convKey(h.record))}#${esc(h.record.recordId)}">${esc(h.conversationTitle ?? '(untitled)')}</a>
 <div class="meta">${esc(h.record.provider)} · ${esc(h.record.role)} · ${esc(h.record.createdAt ?? 'no timestamp')} · source message ${esc(h.record.messageId)} · ${esc(h.record.provenance.exportLabel)}/${esc(h.record.provenance.exportEntry)}</div>
 <div>${esc(h.snippet)}</div></div>`).join('') : '';
         if (!q) body += ix.listConversations(provider).filter((c) => (!from || (c.createdAt ?? '') >= from) && (!to || (c.createdAt ?? '') <= to + 'T23:59:59.999Z')).slice(0, 500)

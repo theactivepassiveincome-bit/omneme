@@ -4,6 +4,9 @@ import { sourceTag, type MemoryRecord, type Provider } from './schema.ts';
 /** View key of a conversation: `provider:id`, or `codingcat/provider:id` for captures. */
 export const convKey = (r: MemoryRecord) => `${sourceTag(r) ? sourceTag(r) + '/' : ''}${r.provider}:${r.conversationId}`;
 
+/** Stable id of one social record (e.g. an X post): `<account namespace>/<native id>`. Social records are never chats. */
+export const socialKey = (r: MemoryRecord) => `${r.conversationId}/${r.messageId}`;
+
 export interface SearchQuery { text: string; provider?: Provider; from?: string; to?: string; limit?: number }
 export interface SearchHit {
   record: MemoryRecord;
@@ -38,6 +41,8 @@ function dayBound(s: string, end: boolean): string {
 export class MemoryIndex {
   readonly all: MemoryRecord[];
   readonly messages: MemoryRecord[];
+  /** Latest social records (OMN-059: X posts). Searchable, but not conversations or messages. */
+  readonly social: MemoryRecord[];
   readonly conversations = new Map<string, MemoryRecord>(); // key provider:conversationId
   readonly revisions: Map<string, number>;
   private byConv = new Map<string, MemoryRecord[]>();
@@ -52,6 +57,8 @@ export class MemoryIndex {
     this.revisions = revisions;
     this.latest = latest;
     this.messages = latest.filter((r) => r.kind === 'message');
+    this.social = latest.filter((r) => r.kind === 'social_event');
+    for (const r of this.social) this.normText.set(r.recordId, norm(r.text));
     for (const r of records) {
       if (r.kind !== 'import') continue;
       const prev = this.latestImports.get(r.provenance.importId);
@@ -90,6 +97,7 @@ export class MemoryIndex {
       conversations: this.conversations.size, messages: this.messages.length, records: this.all.length,
       imports: imports.length, importsNotComplete: imports.filter((i) => i.status !== 'complete').length,
       revisedRecords: this.revisions.size, perProvider: per,
+      socialEvents: this.social.length,
     };
   }
 
@@ -149,7 +157,7 @@ export class MemoryIndex {
     const from = q.from ? dayBound(q.from, false) : null;
     const to = q.to ? dayBound(q.to, true) : null;
     const hits: SearchHit[] = [];
-    for (const m of this.messages) {
+    for (const m of [...this.messages, ...this.social]) {
       if (q.provider && m.provider !== q.provider) continue;
       if (from && (!m.createdAt || m.createdAt < from)) continue;
       if (to && (!m.createdAt || m.createdAt > to)) continue;
@@ -158,7 +166,7 @@ export class MemoryIndex {
       const at = terms.length ? t.indexOf(terms[0]) : 0;
       const s = Math.max(0, at - 60);
       const snippet = (s > 0 ? '…' : '') + m.text.slice(s, s + 200).replace(/\s+/g, ' ') + (m.text.length > s + 200 ? '…' : '');
-      hits.push({ record: m, conversationTitle: this.conversations.get(convKey(m))?.title ?? null, snippet });
+      hits.push({ record: m, conversationTitle: m.kind === 'social_event' ? m.title : this.conversations.get(convKey(m))?.title ?? null, snippet });
     }
     hits.sort((a, b) => (b.record.createdAt ?? '').localeCompare(a.record.createdAt ?? ''));
     return q.limit ? hits.slice(0, q.limit) : hits;
@@ -177,10 +185,23 @@ export class MemoryIndex {
     return m ? convKey(m) : null;
   }
 
-  /** Messages in tree order (depth-first, siblings by time), preserving every branch. */
+  /** One social record by record id, `<namespace>/<native id>` or a unique native id (e.g. `tweet:123`). */
+  socialRecord(id: string): MemoryRecord | null {
+    if (!id) return null;
+    const exact = this.social.find((r) => r.recordId === id || socialKey(r) === id);
+    if (exact) return exact;
+    const byNative = this.social.filter((r) => r.messageId === id);
+    return byNative.length === 1 ? byNative[0] : null;
+  }
+
+  /** Messages in tree order (depth-first, siblings by time), preserving every branch. A social record id returns that
+   *  single record with no conversation (social posts are never grouped into an invented chat thread). */
   conversation(id: string): ConversationView | null {
     const key = this.findConversationKey(id);
-    if (!key) return null;
+    if (!key) {
+      const s = this.socialRecord(id);
+      return s ? { conversation: null, messages: [{ record: s, depth: 0, siblings: 1, position: 1 }] } : null;
+    }
     const msgs = this.byConv.get(key) ?? [];
     const ids = new Set(msgs.map((m) => m.messageId));
     const kids = new Map<string | null, MemoryRecord[]>();

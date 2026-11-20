@@ -7,9 +7,9 @@ Every stored item is one JSON record (encrypted at rest). Source: `src/schema.ts
 | `schema` | `"omneme.record/1"` |
 | `recordId` | `omr_` + 32 hex. A keyed HMAC of lineage + content hash, stable across backup/restore and meaningless outside the vault. |
 | `class` | `original` (imported verbatim), `derived` (AI/tool-generated later), `event` (imports, corrections) |
-| `kind` | `conversation`, `message`, `import`, `correction` |
+| `kind` | `conversation`, `message`, `import`, `correction`, and others in `src/schema.ts`; `social_event` = one item from a social-media archive (an X post), never a chat message |
 | `scope` | Permission scope. Stage 1 always uses `private`. Reserved: `business`, `shared-project`, `agent`, `restricted` |
-| `provider` | `chatgpt` \| `claude` (more later) |
+| `provider` | `chatgpt` \| `claude` \| `gemini` \| `grok` (AI chats); `x` (X archive posts, `social_event` records only) |
 | `conversationId`, `messageId`, `parentMessageId` | Original provider identifiers (ChatGPT: mapping node ids) |
 | `parentInferred` | `true` if the parent was inferred from order rather than supplied |
 | `role`, `authorName` | `user` / `assistant` / `system` / `tool` / provider value, or null |
@@ -25,6 +25,17 @@ Every stored item is one JSON record (encrypted at rest). Source: `src/schema.ts
 | `provenance` | `{importId, importer, importerVersion, exportLabel, exportSha256, exportEntry, elementIndex}` |
 | `contentHash` | SHA-256 of canonical JSON (sorted keys) of `raw` |
 | `raw` | The original provider object, verbatim |
+
+## X posts (`social_event`, provider `x`)
+One record per post: `conversationId` = `x-account:<accountId>` (account namespace from `data/account.js`, so two
+accounts never collide), `messageId` = `tweet:<id>` or `note:<noteTweetId>` (native ids), `role` = `author`,
+`title` = `X post` / `X reply` / `X repost` / `X deleted post` / `X long-form note`, `createdAt` from `created_at`
+(UTC). `relations`: `reply_to`, `edit_of`, `note_of` (only when the archive supplies the link; note text is never
+merged into a post). `flags`: `deleted` (from `deleted-tweets.js`, content kept), `repost`. Media are attachments
+with `referenced_in_export` (or `missing_from_export`); bytes are not copied. `raw` = `{tweet}` (or
+`{deleted: true, tweet}` / `{noteTweet}`) verbatim, so the same post in another split file is a duplicate, a changed
+post is a revision, and a post missing from a later export is never treated as deleted. Social records are
+searchable but are not conversations or messages and are not grouped into threads.
 
 ## Attachment availability
 `text_extracted` (provider-supplied text stored), `referenced_in_export` (file is in the archive, bytes not
